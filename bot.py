@@ -4,7 +4,7 @@ import time
 import os
 
 # ================== КОНФИГУРАЦИЯ ==================
-TOKEN = '8720927581:AAF1b4DKxEKAQO35L8avAqc4-PpmYQVrw6s'
+TOKEN = '8720927581vAqc4-PpmYQVrw6s'
 ADMIN_USERNAMES = ['studionefor', 'Zegyrat_1']
 
 bot = telebot.TeleBot(TOKEN)
@@ -576,3 +576,4 @@ if __name__ == '__main__':
     print("👥 Админы:", ', '.join(ADMIN_USERNAMES))
     print("📸 Поддержка фотографий включена!")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
+
