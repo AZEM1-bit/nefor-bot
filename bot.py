@@ -2,19 +2,10 @@ import telebot
 from telebot import types
 import time
 import os
-import sys
 
 # ================== КОНФИГУРАЦИЯ ==================
-TOKEN = '8720927581:AAF1b4DKxEKAQO35L8avAqc4-PpmYQVrw6s'  # СМЕНИТЕ НА СВОЙ!
+TOKEN = '8720927581:AAF1b4DKxEKAQO35L8avAqc4-PpmYQVrw6s'  # Замените на свой токен!
 ADMIN_USERNAMES = ['studionefor', 'Zegyrat_1']
-
-# Блокировка множественного запуска
-LOCK_FILE = 'bot.lock'
-if os.path.exists(LOCK_FILE):
-    print("❌ Бот уже запущен! Удалите bot.lock")
-    sys.exit(1)
-with open(LOCK_FILE, 'w') as f:
-    f.write(str(os.getpid()))
 
 bot = telebot.TeleBot(TOKEN)
 bot.remove_webhook()
@@ -25,7 +16,7 @@ pending_quizzes = {}
 approved_quizzes = {}
 rejected_quizzes = {}
 all_quizzes = {}
-user_quizzes = {}
+user_quizzes = {}  # Одна анкета на пользователя
 user_survey_data = {}
 quiz_counter = 0
 
@@ -71,7 +62,6 @@ model_questions = [
     "14. Прикрепи 2-3 своих фотографии (можно отправить позже)"
 ]
 
-# ================== КЛАССЫ ==================
 class QuizData:
     def __init__(self, quiz_id, user_id, username, answers, photos, survey_type):
         self.quiz_id = quiz_id
@@ -85,22 +75,18 @@ class QuizData:
         self.reviewed_by = None
         self.reviewed_at = None
 
-# ================== ФУНКЦИИ ==================
+# ================== УТИЛИТЫ ==================
 def safe_send(chat_id, text, **kwargs):
     try:
         return bot.send_message(chat_id, text, **kwargs)
     except Exception as e:
         print(f"Ошибка отправки {chat_id}: {e}")
-        return None
 
-def format_user_link(user_id, username=None):
-    return f"@{username}" if username else f"<a href='tg://user?id={user_id}'>{user_id}</a>"
-
-def check_user_has_quiz(user_id):
+def has_quiz(user_id):
     return user_id in user_quizzes
 
-def log_msg(user_id, text, content_type):
-    print(f"[{time.strftime('%H:%M:%S')}] {user_id}: {content_type} '{text[:50]}...'")
+def format_user_link(user_id, username):
+    return f"@{username}" if username else f"<a href='tg://user?id={user_id}'>{user_id}</a>"
 
 # ================== ПОЛЬЗОВАТЕЛЬ ==================
 @bot.message_handler(commands=['start'])
@@ -109,21 +95,20 @@ def start(message):
     username = message.chat.username
     
     if username in ADMIN_USERNAMES:
-        admin_ids[username] = user_id
-        safe_send(user_id, "✅ Админ-панель доступна!")
+        if username not in admin_ids:
+            admin_ids[username] = user_id
+        safe_send(user_id, "✅ Добро пожаловать в админ-панель!")
         show_admin_menu(user_id)
         return
     
-    safe_send(user_id, 
-        "NEFOR STUDIO на связи! 📢\n\n"
-        "Хочешь зарабатывать на прямых эфирах? "
-        "Мы ищем моделей и операторов!")
+    text = "🎬 NEFOR STUDIO\n\nЗарабатывай на прямых эфирах из дома!\nИщем моделей и операторов!"
+    safe_send(user_id, text)
     show_user_menu(user_id)
 
 def show_user_menu(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    if check_user_has_quiz(user_id):
+    if has_quiz(user_id):
         markup.add(types.InlineKeyboardButton("👤 Моя анкета", callback_data="my_quiz"))
     else:
         markup.add(
@@ -132,200 +117,17 @@ def show_user_menu(user_id):
         )
     
     markup.add(types.InlineKeyboardButton("ℹ️ О нас", callback_data="about_us"))
-    safe_send(user_id, "📋 Главное меню\nВыберите действие:", reply_markup=markup)
+    safe_send(user_id, "📋 Выберите действие:", reply_markup=markup)
 
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user_id = message.chat.id
-    log_msg(user_id, 'PHOTO', 'photo')
-    
-    if user_id not in user_survey_data:
-        safe_send(user_id, "❌ Используй меню!")
-        return
-    
-    data = user_survey_data[user_id]
-    if data['stage'] != 'waiting_photos':
-        safe_send(user_id, "❌ Сначала ответь на вопросы!")
-        return
-    
-    file_id = message.photo[-1].file_id
-    data['photos'].append(file_id)
-    data['photo_count'] += 1
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("✅ Готово", callback_data="photos_done"))
-    
-    safe_send(user_id, 
-        f"✅ Фото {data['photo_count']} получено!\n"
-        f"Можешь отправить ещё или нажми 'Готово'.", 
-        reply_markup=markup)
-
-def process_answers(user_id, text):
-    log_msg(user_id, text, 'text')
-    
-    if user_id not in user_survey_data:
-        return False
-    
-    data = user_survey_data[user_id]
-    if data['stage'] != 'waiting_answers':
-        return False
-    
-    lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
-    data['answers'].extend(lines)
-    
-    if data['type'] == SURVEY_MODEL and len(data['answers']) >= 13:
-        safe_send(user_id, "📸 Отправь 2-3 фото. Потом нажми 'Готово'.")
-        data['stage'] = 'waiting_photos'
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("✅ Готово", callback_data="photos_done"))
-        safe_send(user_id, "Отправляй фото:", reply_markup=markup)
-        return True
-    
-    if data['type'] == SURVEY_OPERATOR and len(data['answers']) >= len(data['questions']):
-        show_confirmation(user_id, data)
-        return True
-    
-    safe_send(user_id, f"✅ {len(data['answers'])} ответов. Продолжай.")
-    return True
-
-def start_survey(user_id, survey_type):
-    questions = operator_questions if survey_type == SURVEY_OPERATOR else model_questions
-    safe_send(user_id, "📋 Вопросы:\n\n" + "\n".join(questions) + 
-              "\n\n✏️ Пиши ответы (каждый с новой строки)")
-    
-    user_survey_data[user_id] = {
-        'type': survey_type, 'questions': questions,
-        'answers': [], 'photos': [], 'stage': 'waiting_answers',
-        'photo_count': 0
-    }
-
-@bot.callback_query_handler(func=lambda call: True)
-def callbacks(call):
-    user_id = call.message.chat.id
-    data = call.data
-    
-    try:
-        # АДМИНЫ
-        if call.message.chat.username in ADMIN_USERNAMES:
-            if data == "main_menu": show_admin_menu(user_id)
-            elif data == "pending": show_pending_quizzes(user_id)
-            elif data == "approved": show_approved_quizzes(user_id)
-            elif data == "rejected": show_rejected_quizzes(user_id)
-            elif data == "all_quizzes": show_all_quizzes(user_id)
-            elif data.startswith("review_"): show_quiz_details(user_id, data[7:])
-            elif data.startswith("manage_"): show_quiz_details(user_id, data[7:])
-            elif data.startswith("approve_"): approve_quiz(user_id, data[8:])
-            elif data.startswith("reject_"): reject_quiz(user_id, data[7:])
-            elif data.startswith("change_to_pending_"): change_to_pending(user_id, data[18:])
-            elif data.startswith("delete_quiz_admin_"): confirm_admin_delete(user_id, data[18:])
-            elif data.startswith("confirm_admin_delete_"): admin_delete_quiz(user_id, data[21:])
-        
-        # ПОЛЬЗОВАТЕЛИ
-        else:
-            if data == "choose_operator":
-                show_choice_confirmation(user_id, "operator")
-            elif data == "choose_model":
-                show_choice_confirmation(user_id, "model")
-            elif data == "confirm_operator":
-                start_survey(user_id, SURVEY_OPERATOR)
-            elif data == "confirm_model":
-                start_survey(user_id, SURVEY_MODEL)
-            elif data == "my_quiz":
-                show_my_quiz(user_id)
-            elif data == "edit_quiz":
-                edit_quiz(user_id)
-            elif data == "delete_quiz":
-                delete_quiz(user_id)
-            elif data == "about_us":
-                show_about_us(user_id)
-            elif data == "back_to_user_menu":
-                show_user_menu(user_id)
-            elif data == "photos_done":
-                photos_done(call)
-            elif data == "confirm_final":
-                confirm_final(user_id)
-            elif data == "edit_survey":
-                edit_survey(user_id)
-    except Exception as e:
-        print(f"Ошибка callback: {e}")
-    
-    try:
-        bot.delete_message(user_id, call.message.message_id)
-    except: pass
-    bot.answer_callback_query(call.id)
-
-def photos_done(call):
-    user_id = call.message.chat.id
-    if user_id not in user_survey_data or user_survey_data[user_id]['stage'] != 'waiting_photos':
-        bot.answer_callback_query(call.id, "❌ Ошибка")
-        return
-    if user_survey_data[user_id]['photo_count'] < 1:
-        bot.answer_callback_query(call.id, "❌ Нужен хотя бы 1 фото")
-        return
-    show_confirmation(user_id, user_survey_data[user_id])
-
-def show_confirmation(user_id, data):
-    questions = data['questions']
-    answers = data['answers'][:len(questions)]
-    
-    text = "📋 Твои ответы:\n\n"
-    for q, a in zip(questions, answers):
-        text += f"{q}\n{a}\n\n"
-    
-    if data['photos']:
-        text += f"📸 Фото: {len(data['photos'])} шт."
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_final"),
-        types.InlineKeyboardButton("✏️ Изменить", callback_data="edit_survey")
-    )
-    markup.add(types.InlineKeyboardButton("❌ Назад", callback_data="back_to_user_menu"))
-    
-    data['stage'] = 'confirm'
-    safe_send(user_id, text + "\nВсё верно?", reply_markup=markup)
-
-def confirm_final(user_id):
-    if user_id not in user_survey_data or user_survey_data[user_id]['stage'] != 'confirm':
-        return
-    
-    data = user_survey_data[user_id]
-    if check_user_has_quiz(user_id):
-        safe_send(user_id, "❌ Анкета уже есть!")
-        del user_survey_data[user_id]
-        show_user_menu(user_id)
-        return
-    
-    global quiz_counter
-    quiz_counter += 1
-    quiz_id = f"survey_{data['type']}_{quiz_counter}"
-    
-    try:
-        username = bot.get_chat(user_id).username
-    except:
-        username = None
-    
-    quiz = QuizData(quiz_id, user_id, username, data['answers'], 
-                   data.get('photos', []), data['type'])
-    
-    pending_quizzes[quiz_id] = all_quizzes[quiz_id] = quiz
-    user_quizzes[user_id] = quiz_id
-    
-    safe_send(user_id, "✅ Анкета отправлена на проверку!")
-    notify_admins(quiz_id, user_id, username, data)
-    del user_survey_data[user_id]
-    show_user_menu(user_id)
-
-# Остальные функции (вырезал для краткости, но они работают)
 def show_choice_confirmation(user_id, choice):
-    if check_user_has_quiz(user_id):
-        safe_send(user_id, "❌ Анкета уже есть!")
+    if has_quiz(user_id):
+        safe_send(user_id, "❌ У вас уже есть анкета!")
         show_user_menu(user_id)
         return
     
     texts = {
-        "operator": "Готов работать оператором? Начнём опрос.",
-        "model": "Готова зарабатывать на эфирах? Начнём!"
+        "operator": "Мы ищем опытных операторов для работы с моделями.\nГотов пройти опрос?",
+        "model": "Зарабатывай на прямых эфирах из дома!\nГотова пройти опрос?"
     }
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -335,37 +137,39 @@ def show_choice_confirmation(user_id, choice):
     )
     safe_send(user_id, texts[choice], reply_markup=markup)
 
-def show_my_quiz(user_id):
-    if user_id not in user_quizzes:
-        show_user_menu(user_id)
+def start_survey(user_id, survey_type):
+    questions = operator_questions if survey_type == SURVEY_OPERATOR else model_questions
+    text = "📋 Вопросы:\n\n" + "\n".join(questions) + "\n\n✏️ Напиши ответы СРАЗУ НА ВСЕ ВОПРОСЫ (каждый с новой строки)"
+    
+    user_survey_data[user_id] = {
+        'type': survey_type,
+        'questions': questions,
+        'answers': [],
+        'photos': [],
+        'stage': 'waiting_answers'
+    }
+    safe_send(user_id, text)
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user_id = message.chat.id
+    
+    if user_id not in user_survey_data or user_survey_data[user_id]['stage'] != 'waiting_photos':
+        safe_send(user_id, "❌ Сначала ответь на вопросы!")
         return
     
-    quiz_id = user_quizzes[user_id]
-    quiz = (pending_quizzes.get(quiz_id) or approved_quizzes.get(quiz_id) or 
-            rejected_quizzes.get(quiz_id))
-    
-    status = {"pending": "⏳ Ожидает", "approved": "✅ Принята", "rejected": "❌ Отклонена"}
-    emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
-    
-    text = f"{emoji[quiz.status]} {status[quiz.status]}\n\n"
-    for i, ans in enumerate(quiz.answers):
-        text += f"{i+1}. {ans}\n"
-    
-    safe_send(user_id, text)
+    data = user_survey_data[user_id]
+    file_id = message.photo[-1].file_id
+    data['photos'].append(file_id)
     
     markup = types.InlineKeyboardMarkup()
-    if quiz.status == 'pending':
-        markup.add(types.InlineKeyboardButton("✏️ Редактировать", callback_data="edit_quiz"))
-    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="back_to_user_menu"))
-    safe_send(user_id, "Действия:", reply_markup=markup)
+    markup.add(types.InlineKeyboardButton("✅ Готово", callback_data="photos_done"))
+    safe_send(user_id, f"✅ Фото добавлено ({len(data['photos'])})\nОтправь ещё или нажми 'Готово'", reply_markup=markup)
 
-# ================== ОСНОВНОЙ ХЭНДЛЕР (ИСПРАВЛЕН) ==================
 @bot.message_handler(func=lambda m: True)
-def main_handler(message):
+def handle_text(message):
     user_id = message.chat.id
-    text = message.text or ''
-    
-    log_msg(user_id, text, message.content_type)
+    text = message.text
     
     if message.chat.username in ADMIN_USERNAMES:
         return
@@ -373,33 +177,358 @@ def main_handler(message):
     if user_id in user_survey_data:
         data = user_survey_data[user_id]
         
-        if message.content_type == 'text' and data['stage'] == 'waiting_answers':
-            process_answers(user_id, text)
-            return
-        elif message.content_type == 'photo' and data['stage'] == 'waiting_photos':
-            handle_photo(message)
+        if data['stage'] == 'waiting_answers':
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            data['answers'] = lines
+            
+            if data['type'] == SURVEY_OPERATOR and len(lines) >= len(data['questions']):
+                show_confirmation(user_id, data)
+            elif data['type'] == SURVEY_MODEL and len(lines) >= 13:
+                safe_send(user_id, "📸 Отправь 2-3 фото по очереди")
+                data['stage'] = 'waiting_photos'
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("✅ Без фото", callback_data="photos_done"))
+                safe_send(user_id, "Отправляй фото:", reply_markup=markup)
+            else:
+                safe_send(user_id, f"Получено {len(lines)} ответов. Нужно {'18' if data['type'] == SURVEY_OPERATOR else '13'}. Продолжай!")
             return
         
-        safe_send(user_id, "❌ Продолжай отвечать на вопросы!")
-        return
+        elif data['stage'] == 'waiting_photos':
+            safe_send(user_id, "❌ Отправляй фото или нажми кнопку!")
+            return
     
     show_user_menu(user_id)
 
-# ================== АДМИН (сокр.) ==================
+@bot.callback_query_handler(func=lambda call: True)
+def callbacks(call):
+    user_id = call.message.chat.id
+    data = call.data
+    
+    try:
+        # АДМИН
+        if call.message.chat.username in ADMIN_USERNAMES:
+            handle_admin_callbacks(user_id, data)
+        # ПОЛЬЗОВАТЕЛЬ
+        else:
+            handle_user_callbacks(user_id, data)
+    except Exception as e:
+        print(f"Ошибка callback: {e}")
+    
+    try:
+        bot.delete_message(user_id, call.message.message_id)
+    except: pass
+    bot.answer_callback_query(call.id)
+
+def handle_user_callbacks(user_id, data):
+    if data == "choose_operator":
+        show_choice_confirmation(user_id, "operator")
+    elif data == "choose_model":
+        show_choice_confirmation(user_id, "model")
+    elif data == "confirm_operator":
+        start_survey(user_id, SURVEY_OPERATOR)
+    elif data == "confirm_model":
+        start_survey(user_id, SURVEY_MODEL)
+    elif data == "my_quiz":
+        show_my_quiz(user_id)
+    elif data == "edit_quiz":
+        edit_quiz(user_id)
+    elif data == "delete_quiz":
+        delete_quiz(user_id)
+    elif data == "about_us":
+        show_about_us(user_id)
+    elif data == "back_to_user_menu":
+        show_user_menu(user_id)
+    elif data == "photos_done":
+        if user_id in user_survey_data:
+            show_confirmation(user_id, user_survey_data[user_id])
+    elif data == "confirm_final":
+        confirm_final(user_id)
+    elif data == "edit_survey":
+        survey_type = user_survey_data[user_id]['type']
+        del user_survey_data[user_id]
+        start_survey(user_id, survey_type)
+
+def show_confirmation(user_id, data):
+    questions = data['questions']
+    answers = data['answers'][:len(questions)]
+    
+    text = "📋 Предпросмотр анкеты:\n\n"
+    for q, a in zip(questions, answers):
+        text += f"📌 {q}\n{a}\n\n"
+    
+    if data['photos']:
+        text += f"📸 Фото: {len(data['photos'])} шт."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ Отправить", callback_data="confirm_final"),
+        types.InlineKeyboardButton("✏️ Изменить", callback_data="edit_survey")
+    )
+    markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data="back_to_user_menu"))
+    
+    data['stage'] = 'confirm'
+    safe_send(user_id, text + "\n\nВсё верно?", reply_markup=markup)
+
+def confirm_final(user_id):
+    if user_id not in user_survey_data:
+        return
+    
+    data = user_survey_data[user_id]
+    if has_quiz(user_id):
+        safe_send(user_id, "❌ У вас уже есть анкета!")
+        show_user_menu(user_id)
+        return
+    
+    global quiz_counter
+    quiz_counter += 1
+    quiz_id = f"q_{data['type']}_{quiz_counter:03d}"
+    
+    try:
+        username = bot.get_chat(user_id).username
+    except:
+        username = None
+    
+    quiz = QuizData(quiz_id, user_id, username, data['answers'], data['photos'], data['type'])
+    
+    pending_quizzes[quiz_id] = quiz
+    all_quizzes[quiz_id] = quiz
+    user_quizzes[user_id] = quiz_id
+    
+    safe_send(user_id, "✅ Анкета отправлена на проверку!")
+    notify_admins_new_quiz(quiz)
+    del user_survey_data[user_id]
+    show_user_menu(user_id)
+
+def show_my_quiz(user_id):
+    if not has_quiz(user_id):
+        show_user_menu(user_id)
+        return
+    
+    quiz_id = user_quizzes[user_id]
+    quiz = (pending_quizzes.get(quiz_id) or approved_quizzes.get(quiz_id) or rejected_quizzes.get(quiz_id))
+    
+    status_text = {"pending": "⏳ Ожидает проверки", "approved": "✅ Принята", "rejected": "❌ Отклонена"}
+    emoji = {"pending": "⏳", "approved": "✅", "rejected": "❌"}
+    
+    text = f"{emoji[quiz.status]} Статус: {status_text[quiz.status]}\n\n"
+    for i, answer in enumerate(quiz.answers):
+        text += f"{i+1}. {answer}\n"
+    
+    safe_send(user_id, text)
+    
+    if quiz.photos:
+        safe_send(user_id, f"📸 Фото ({len(quiz.photos)} шт.):")
+        for photo in quiz.photos[:3]:  # Первые 3
+            try:
+                bot.send_photo(user_id, photo)
+            except:
+                pass
+    
+    markup = types.InlineKeyboardMarkup()
+    if quiz.status == 'pending':
+        markup.add(types.InlineKeyboardButton("✏️ Редактировать", callback_data="edit_quiz"))
+    markup.add(types.InlineKeyboardButton("🗑 Удалить", callback_data="delete_quiz"))
+    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="back_to_user_menu"))
+    safe_send(user_id, "Действия:", reply_markup=markup)
+
+def edit_quiz(user_id):
+    if not has_quiz(user_id):
+        show_user_menu(user_id)
+        return
+    
+    quiz_id = user_quizzes[user_id]
+    quiz = pending_quizzes.get(quiz_id)
+    
+    if quiz and quiz.status == 'pending':
+        for storage in [pending_quizzes, approved_quizzes, rejected_quizzes, all_quizzes]:
+            storage.pop(quiz_id, None)
+        del user_quizzes[user_id]
+        start_survey(user_id, quiz.survey_type)
+    else:
+        show_user_menu(user_id)
+
+def delete_quiz(user_id):
+    if has_quiz(user_id):
+        quiz_id = user_quizzes[user_id]
+        for storage in [pending_quizzes, approved_quizzes, rejected_quizzes, all_quizzes]:
+            storage.pop(quiz_id, None)
+        del user_quizzes[user_id]
+        safe_send(user_id, "✅ Анкета удалена")
+    show_user_menu(user_id)
+
+def show_about_us(user_id):
+    text = """🎬 Nefor Studio - зарабатывай на прямых эфирах!
+
+💰 Заработок: 10 000₽/смена (50% от чека)
+📱 Нужно только: телефон + интернет
+⏰ График: 5/2 по 6-7 часов
+
+👨‍💼 Операторы - ведут чаты, увеличивают доход
+👩 Модели - ведут эфиры с поддержкой оператора
+
+🎯 Присоединяйся в команду!"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="back_to_user_menu"))
+    safe_send(user_id, text, reply_markup=markup)
+
+# ================== АДМИН ==================
 def show_admin_menu(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(f"📋 На проверке ({len(pending_quizzes)})", callback_data="pending"),
-        types.InlineKeyboardButton("✅ Принятые", callback_data="approved"),
-        types.InlineKeyboardButton("❌ Отклонённые", callback_data="rejected")
+        types.InlineKeyboardButton("✅ Принятые", callback_data="approved")
     )
-    safe_send(user_id, "🔐 Админ-панель:", reply_markup=markup)
+    markup.add(
+        types.InlineKeyboardButton("❌ Отклонённые", callback_data="rejected"),
+        types.InlineKeyboardButton("📊 Все ({len(all_quizzes)})", callback_data="all_quizzes")
+    )
+    safe_send(user_id, "🔐 Админ-панель", reply_markup=markup)
 
-# Запуск
+def notify_admins_new_quiz(quiz):
+    type_name = "Оператор" if quiz.survey_type == SURVEY_OPERATOR else "Модель"
+    link = format_user_link(quiz.user_id, quiz.username)
+    
+    text = f"🔔 Новая анкета {type_name}!\n\n📋 ID: {quiz.quiz_id}\n👤 {link}\n🕐 {time.strftime('%d.%m %H:%M', time.localtime(quiz.timestamp))}\n\n"
+    
+    for i, answer in enumerate(quiz.answers):
+        text += f"{i+1}. {answer}\n"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📋 Проверить", callback_data=f"review_{quiz.quiz_id}"))
+    
+    for admin_id in admin_ids.values():
+        safe_send(admin_id, text, reply_markup=markup, parse_mode='HTML')
+        
+        if quiz.photos:
+            safe_send(admin_id, f"📸 Фото ({len(quiz.photos)} шт.):")
+            for photo in quiz.photos:
+                try:
+                    bot.send_photo(admin_id, photo)
+                except:
+                    pass
+
+def handle_admin_callbacks(user_id, data):
+    if data == "main_menu":
+        show_admin_menu(user_id)
+    elif data == "pending":
+        show_pending_quizzes(user_id)
+    elif data == "approved":
+        show_approved_quizzes(user_id)
+    elif data == "rejected":
+        show_rejected_quizzes(user_id)
+    elif data == "all_quizzes":
+        show_all_quizzes(user_id)
+    elif data.startswith("review_") or data.startswith("manage_"):
+        show_quiz_details(user_id, data.split('_')[-1])
+    elif data.startswith("approve_"):
+        approve_quiz(user_id, data[7:])
+    elif data.startswith("reject_"):
+        reject_quiz(user_id, data[6:])
+    elif data.startswith("delete_"):
+        delete_quiz_admin(user_id, data[7:])
+
+def show_pending_quizzes(user_id):
+    if not pending_quizzes:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="main_menu"))
+        safe_send(user_id, "📭 Нет анкет на проверке", reply_markup=markup)
+        return
+    
+    text = f"📋 На проверке ({len(pending_quizzes)}):\n\n"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    for quiz_id, quiz in list(pending_quizzes.items())[:10]:
+        link = format_user_link(quiz.user_id, quiz.username)
+        text += f"• {quiz_id} - {link}\n"
+        markup.add(types.InlineKeyboardButton(quiz_id[:10], callback_data=f"review_{quiz_id}"))
+    
+    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="main_menu"))
+    safe_send(user_id, text, reply_markup=markup, parse_mode='HTML')
+
+def show_quiz_details(user_id, quiz_id):
+    quiz = (pending_quizzes.get(quiz_id) or approved_quizzes.get(quiz_id) or rejected_quizzes.get(quiz_id))
+    if not quiz:
+        safe_send(user_id, "❌ Анкета не найдена")
+        return
+    
+    link = format_user_link(quiz.user_id, quiz.username)
+    status = {"pending": "⏳", "approved": "✅", "rejected": "❌"}[quiz.status]
+    
+    text = f"{status} Анкета {quiz_id}\n👤 {link}\n🕐 {time.strftime('%d.%m %H:%M', time.localtime(quiz.timestamp))}\n\n"
+    for i, answer in enumerate(quiz.answers):
+        text += f"{i+1}. {answer}\n"
+    
+    safe_send(user_id, text, parse_mode='HTML')
+    
+    if quiz.photos:
+        safe_send(user_id, f"📸 Фото ({len(quiz.photos)}):")
+        for photo in quiz.photos:
+            try:
+                bot.send_photo(user_id, photo)
+            except:
+                pass
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if quiz.status == 'pending':
+        markup.add(
+            types.InlineKeyboardButton("✅ Принять", callback_data=f"approve_{quiz_id}"),
+            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{quiz_id}")
+        )
+    else:
+        markup.add(types.InlineKeyboardButton("⏳ На проверку", callback_data=f"pending_{quiz_id}"))
+    
+    markup.add(
+        types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{quiz_id}"),
+        types.InlineKeyboardButton("◀ Назад", callback_data="main_menu")
+    )
+    safe_send(user_id, "Действия:", reply_markup=markup)
+
+def approve_quiz(user_id, quiz_id):
+    quiz = pending_quizzes.pop(quiz_id, None)
+    if quiz:
+        quiz.status = 'approved'
+        quiz.reviewed_by = user_id
+        quiz.reviewed_at = time.time()
+        approved_quizzes[quiz_id] = quiz
+        safe_send(user_id, f"✅ Анкета {quiz_id} принята!")
+    show_admin_menu(user_id)
+
+def reject_quiz(user_id, quiz_id):
+    quiz = pending_quizzes.pop(quiz_id, None)
+    if quiz:
+        quiz.status = 'rejected'
+        quiz.reviewed_by = user_id
+        quiz.reviewed_at = time.time()
+        rejected_quizzes[quiz_id] = quiz
+        safe_send(user_id, f"❌ Анкета {quiz_id} отклонена!")
+    show_admin_menu(user_id)
+
+def delete_quiz_admin(user_id, quiz_id):
+    for storage in [pending_quizzes, approved_quizzes, rejected_quizzes]:
+        quiz = storage.pop(quiz_id, None)
+        if quiz and quiz.user_id in user_quizzes:
+            del user_quizzes[quiz.user_id]
+            break
+    safe_send(user_id, f"🗑 Анкета {quiz_id} удалена!")
+    show_admin_menu(user_id)
+
+# Остальные админ функции (упрощённые)
+def show_approved_quizzes(user_id):
+    safe_send(user_id, f"✅ Принятых: {len(approved_quizzes)}", reply_markup=back_menu())
+
+def show_rejected_quizzes(user_id):
+    safe_send(user_id, f"❌ Отклонённых: {len(rejected_quizzes)}", reply_markup=back_menu())
+
+def show_all_quizzes(user_id):
+    safe_send(user_id, f"📊 Всего анкет: {len(all_quizzes)}", reply_markup=back_menu())
+
+def back_menu():
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="main_menu"))
+    return markup
+
+# ================== ЗАПУСК ==================
 if __name__ == '__main__':
-    print("🚀 Бот запущен!")
-    try:
-        bot.infinity_polling(timeout=60)
-    finally:
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
+    print("🚀 Nefor Studio Bot запущен!")
+    print("👥 Админы:", ADMIN_USERNAMES)
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
