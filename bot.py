@@ -4,7 +4,7 @@ import time
 import os
 
 # ================== КОНФИГУРАЦИЯ ==================
-TOKEN = '8720927581:AAF1b4DKxEKAQO35L8avAqc4-PpmYQVrw6s'  # Замените на свой токен!
+TOKEN = '8720927581:AAF1b4DKxEKAQO35L8avAqc4-PpmYQVrw6s'
 ADMIN_USERNAMES = ['studionefor', 'Zegyrat_1']
 
 bot = telebot.TeleBot(TOKEN)
@@ -87,11 +87,6 @@ def has_quiz(user_id):
 
 def format_user_link(user_id, username):
     return f"@{username}" if username else f"<a href='tg://user?id={user_id}'>{user_id}</a>"
-
-def back_menu():
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("◀ Назад", callback_data="main_menu"))
-    return markup
 
 # ================== ПОЛЬЗОВАТЕЛЬ ==================
 @bot.message_handler(commands=['start'])
@@ -178,9 +173,7 @@ def handle_photo(message):
     file_id = message.photo[-1].file_id
     data['photos'].append(file_id)
     
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("✅ Готово (фото отправлены)", callback_data="photos_done"))
-    safe_send(user_id, f"✅ Фото {len(data['photos'])} получено!\nМожешь отправить ещё или нажать 'Готово'.", reply_markup=markup)
+    safe_send(user_id, f"✅ Фото {len(data['photos'])} получено!\nПродолжай отправлять фотографии (2-3 шт.)")
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
@@ -200,18 +193,15 @@ def handle_text(message):
             safe_send(user_id, f"✅ Получено {len(lines)} ответов.")
             
             if data['type'] == SURVEY_MODEL:
-                safe_send(user_id, "📸 Теперь отправь фотографии (2-3 шт). Отправляй по одной. Когда закончишь, нажми 'Готово'.")
+                safe_send(user_id, "📸 Теперь отправь фотографии (2-3 шт). Отправляй по одной.")
                 data['stage'] = 'waiting_photos'
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton("✅ Готово (фото отправлены)", callback_data="photos_done"))
-                safe_send(user_id, "Отправляй фотографии:", reply_markup=markup)
             else:
                 # Оператор сразу на предпросмотр
                 show_confirmation(user_id, data)
             return
         
         elif data['stage'] == 'waiting_photos':
-            safe_send(user_id, "❌ Отправляй фото или нажми 'Готово'!")
+            safe_send(user_id, "❌ Отправляй фото! Нужны 2-3 фотографии.")
             return
     
     show_user_menu(user_id)
@@ -255,9 +245,6 @@ def handle_user_callbacks(user_id, data):
         show_about_us(user_id)
     elif data == "back_to_user_menu":
         show_user_menu(user_id)
-    elif data == "photos_done":
-        if user_id in user_survey_data and user_survey_data[user_id]['stage'] == 'waiting_photos':
-            show_confirmation(user_id, user_survey_data[user_id])
     elif data == "confirm_final":
         confirm_final(user_id)
     elif data == "edit_survey":
@@ -275,6 +262,8 @@ def show_confirmation(user_id, data):
     
     if data['photos']:
         text += f"📸 Фотографии: {len(data['photos'])} шт."
+    else:
+        text += "📸 Фотографии: не добавлены"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -312,9 +301,51 @@ def confirm_final(user_id):
     user_quizzes[user_id] = quiz_id
     
     safe_send(user_id, "✅ Спасибо! Анкета отправлена на проверку!")
-    notify_admins_about_survey(quiz_id, user_id, username, data['type'], data['answers'], data['photos'], data['questions'])
+    
+    # ✅ ВЕРНУТЫ УВЕДОМЛЕНИЯ АДМИНАМ
+    notify_admins_about_survey(quiz_id, user_id, username, data['type'], 
+                              data['answers'], data['photos'], data['questions'])
+    
     del user_survey_data[user_id]
     show_user_menu(user_id)
+
+def notify_admins_about_survey(quiz_id, user_id, username, survey_type, answers, photos, questions):
+    if not admin_ids:
+        return
+
+    type_name = "Оператор" if survey_type == SURVEY_OPERATOR else "Модель"
+    
+    if username:
+        user_display = f"@{username}"
+    else:
+        user_display = f"<a href='tg://user?id={user_id}'>{user_id}</a>"
+
+    answers_text = ""
+    for i, (q, a) in enumerate(zip(questions, answers)):
+        answers_text += f"{q}\n{a}\n\n"
+    
+    for admin_id in admin_ids.values():
+        try:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📋 Проверить", callback_data=f"review_{quiz_id}"))
+            
+            bot.send_message(
+                admin_id,
+                f"🔔 Новая анкета {type_name}!\n\n"
+                f"📋 Номер: {quiz_id}\n"
+                f"👤 Пользователь: {user_display}\n\n"
+                f"{answers_text}",
+                reply_markup=markup,
+                parse_mode='HTML'
+            )
+            
+            if photos:
+                bot.send_message(admin_id, f"📸 Фотографии ({len(photos)} шт.):")
+                for photo_id in photos:
+                    bot.send_photo(admin_id, photo_id)
+                    
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
 
 def show_my_quiz(user_id):
     if not has_quiz(user_id):
@@ -419,44 +450,6 @@ def show_admin_menu(user_id):
     )
     safe_send(user_id, "🔐 Админ-панель\nВыберите раздел:", reply_markup=markup)
 
-def notify_admins_about_survey(quiz_id, user_id, username, survey_type, answers, photos, questions):
-    if not admin_ids:
-        return
-
-    type_name = "Оператор" if survey_type == SURVEY_OPERATOR else "Модель"
-    
-    if username:
-        user_display = f"@{username}"
-    else:
-        user_display = f"<a href='tg://user?id={user_id}'>{user_id}</a>"
-
-    answers_text = ""
-    for i, (q, a) in enumerate(zip(questions, answers)):
-        answers_text += f"{q}\n{a}\n\n"
-    
-    for admin_id in admin_ids.values():
-        try:
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("📋 Проверить", callback_data=f"review_{quiz_id}"))
-            
-            bot.send_message(
-                admin_id,
-                f"🔔 Новая анкета {type_name}!\n\n"
-                f"📋 Номер: {quiz_id}\n"
-                f"👤 Пользователь: {user_display}\n\n"
-                f"{answers_text}",
-                reply_markup=markup,
-                parse_mode='HTML'
-            )
-            
-            if photos:
-                bot.send_message(admin_id, f"📸 Фотографии ({len(photos)} шт.):")
-                for photo_id in photos:
-                    bot.send_photo(admin_id, photo_id)
-                    
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
-
 def handle_admin_callbacks(user_id, data):
     if data == "main_menu":
         show_admin_menu(user_id)
@@ -524,8 +517,6 @@ def show_quiz_details(user_id, quiz_id):
             types.InlineKeyboardButton("✅ Принять", callback_data=f"approve_{quiz_id}"),
             types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{quiz_id}")
         )
-    else:
-        markup.add(types.InlineKeyboardButton("⏳ Вернуть на проверку", callback_data=f"change_to_pending_{quiz_id}"))
     markup.add(
         types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_quiz_admin_{quiz_id}"),
         types.InlineKeyboardButton("◀ Назад", callback_data="main_menu")
